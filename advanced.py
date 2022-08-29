@@ -104,6 +104,115 @@ def filters_config(selected_datasource_code = None, save = False):
     return filters_dict
 
 
+def view_data_multiple(locations = None, selected_datasource_code = None, save = False):
+    """
+    Allows user to to access records for a particular location based on a selected 
+    variable and display the data in table format; option to save the file available
+        profile is the data related to the selected location
+        selected_datasource_code is the source of the particular record
+    """
+    if locations and selected_datasource_code:
+        filters = filters_config(selected_datasource_code, save)
+
+        request_locations_tahmo = {"DataSourceCodes" : [selected_datasource_code]}
+        locations_tahmo_response = requests.post(api + 'entity/locations/get',
+            headers = api_header, data = json.dumps(request_locations_tahmo))
+        locations_tahmo = locations_tahmo_response.json()
+
+        all_dataframes = [] #holds dataframes for different locations
+        for location in locations:
+            profile = locations_tahmo.get("Locations").get(location)
+            request_tahmo_data = {
+                "Readers" : [{
+                    "DataSourceCode" : selected_datasource_code,
+                    "Settings" : {
+                        "LocationCodes" : [profile.get('Code')],
+                        "VariableCodes" : [filters.get("VariableCodes")],
+                        "StartDate" : filters.get("StartDate") + "000000",
+                        "EndDate" : filters.get("EndDate") + "000000",
+                        "StructureType" : "TimeSeries",
+                    }
+                }]
+            }
+            data_response = requests.post(api + 'data/get', headers = api_header, 
+                    data = json.dumps(request_tahmo_data))
+            tahmo_data = json.loads(data_response.content.decode('utf-8-sig'))
+
+            tahmo_data_df = pd.DataFrame(tahmo_data['Data'][0]['Data'])
+            tahmo_data_df['DateTime'] = pd.to_datetime(tahmo_data_df['DateTime'])
+
+            #modify the data frame
+            del tahmo_data_df['Availability']
+            del tahmo_data_df['Quality']
+            tahmo_data_df = tahmo_data_df.rename(
+                    columns = {'Value' : filters.get('VariableCodes')})
+
+            #add data to data frame
+            tahmo_data_df['Code'] = profile.get('Code')
+            tahmo_data_df['X'] = profile.get('X')
+            tahmo_data_df['Y'] = profile.get('Y')
+            tahmo_data_df['Location'] = profile.get('Name')
+
+            #retrieve data yearly
+            first_year = int(filters.get("StartDate")[:4])
+            last_year = int(filters.get("EndDate")[:4])
+
+            dataframes = []
+            for year in range(first_year, last_year):
+                #filter based on year
+                df = tahmo_data_df[tahmo_data_df['DateTime'].dt.year == year]
+
+                #perform calculations (monthly mean)
+                df = df.groupby(df['DateTime'].dt.strftime("%-m"))[
+                        filters.get("VariableCodes")].sum().reset_index()
+
+                #add a new column called Year with current year as value
+                df.insert(loc = 0, column = 'Year', value = year)
+                #df = df.pivot(index = 'Year', columns = 'DateTime')
+    
+                dataframes.append(df)
+                print(df)
+
+            print(dataframes)
+            tahmo_data_df = dataframes[0]
+            for index in range(1, len(dataframes)):
+                tahmo_data_df = pd.concat([tahmo_data_df, dataframes[index]], axis = 0)
+
+            #add data to data frame
+            print("columns")
+            tahmo_data_df['Code'] = profile.get('Code')
+            tahmo_data_df['X'] = profile.get('X')
+            tahmo_data_df['Y'] = profile.get('Y')
+            tahmo_data_df['Location'] = profile.get('Name')
+            tahmo_data_df['Country'] = 'Kenya'
+
+            all_dataframes.append(tahmo_data_df) #add dataframe to list
+            print(tahmo_data_df)
+        
+        #concatenate all dataframes
+        tahmo_data_df = all_dataframes[0]
+        for index in range(1, len(all_dataframes)):
+            tahmo_data_df = pd.concat([tahmo_data_df, all_dataframes[index]], axis = 0)
+
+        #save data in file
+        if save:
+            if filters.get("FileFormat") == 'csv':
+                tahmo_data_df.to_csv('combined.csv', index = False)
+                print(f"Saving of data in combined.csv successful")
+
+            elif filters.get("FileFormat") == 'html':
+                tahmo_data_df.to_html('combined.html', index = False)
+                print(f"Saving of data in combined.html successful")
+
+            elif filters.get("FileFormat") == 'excel':
+                tahmo_data_df.to_excel('combined.xlsx', index = False)
+                print(f"Saving of data in combined.xlsx successful")
+
+    print("\nYou will be redirected to the select multiple location menu in 10 seconds...")
+    time.sleep(10)
+    select_multiple_location(selected_datasource_code)
+
+
 def view_data(profile = None, selected_datasource_code = None, save = False):
     """
     Allows user to to access records for a particular location based on a selected 
@@ -197,6 +306,61 @@ def view_data(profile = None, selected_datasource_code = None, save = False):
     time.sleep(10)
     select_location(selected_datasource_code)
 
+def multiple_locations_data(locations = None, selected_datasource_code = None):
+    
+    if locations and selected_datasource_code:
+        request_locations_tahmo = {"DataSourceCodes" : [selected_datasource_code]}
+        locations_tahmo_response = requests.post(api + 'entity/locations/get',
+            headers = api_header, data = json.dumps(request_locations_tahmo))
+        locations_tahmo = locations_tahmo_response.json()
+
+        title = """
+        =================================================================================
+                                    LOCATION PROFILES
+        =================================================================================
+        """
+        print(title)
+        
+        for location in locations:
+            profile = locations_tahmo.get("Locations").get(location)
+            try:
+                for key, value in profile.items():
+                    print("         {:<16}   {:<50}".format(key, value))
+            except:
+                pass
+
+        menu = """
+        =================================================================================
+                                LOCATION LEVEL ACTION MENU
+        =================================================================================
+        Various actions can be carried out at the location level. You may decide to 
+        display the data in table format, or write the data to a csv file for further 
+        custom analysis. The following are some of the supported actions :
+
+            1. VIEW DATA
+            2. SAVE DATA TO FILE
+            3. GO TO MAIN MENU
+            4. EXIT PROGRAM
+        """
+        print(menu)
+        try:
+            choice = int(input("Select an item from the menu (integers only) : "))
+            if choice == 1:
+                view_data_multiple(locations, selected_datasource_code)
+
+            elif choice == 2:
+                view_data_multiple(locations, selected_datasource_code, True)
+
+            elif choice == 3:
+                main_menu()
+
+            elif choice == 0:
+                exit_program()
+        except ValueError:
+            print("Invalid choice. Please try again...")
+            time.sleep(0.8)
+            location_profile(location, selected_datasource_code)
+
 def location_profile(location = None, selected_datasource_code = None):
     
     if location and selected_datasource_code:
@@ -275,7 +439,7 @@ def view_available_locations(selected_datasource_code = None, required = False):
             print("             ", location)
 
 
-def select_location(selected_datasource_code = None):
+def select_location(selected_datasource_code = None, multiple = False):
     if selected_datasource_code:
         locations_dict = {} #holds the locations with an index
         choices = view_available_locations(selected_datasource_code, True)
@@ -283,6 +447,16 @@ def select_location(selected_datasource_code = None):
         for key, value in enumerate(choices):
             locations_dict.update({key : value})
             print("     ", key, "   ", value)
+
+        if multiple:
+            locations = list()
+            num = int(input("How many locations do you wish to extract data from? "))
+            
+            for i in range(num):
+                choice = int(input(f"Select location {i} : "))
+                if choice in locations_dict.keys():
+                    locations.append(locations_dict.get(choice))
+            multiple_locations_data(locations, selected_datasource_code)
 
         try:
             choice = int(input("Select a location from the menu (integers only) : "))
@@ -352,8 +526,9 @@ def data_source_profile(selected = None):
             1. VIEW LOCATIONS COVERED e.g., Ole Tipis Girls' Secondary School
             2. VIEW VARIABLES MEASURED e.g., rainfall, temperature
             3. SELECT A LOCATION
-            4. GO TO MAIN MENU
-            5. BULK OBTAIN DATA
+            4. SELECT MULTIPLE LOCATIONS
+            5. GO TO MAIN MENU
+            6. BULK OBTAIN DATA
             0. EXIT PROGRAM
         """
         print(menu)
@@ -361,14 +536,20 @@ def data_source_profile(selected = None):
             choice = int(input("Select a choice from the menu (only integers allowed) :"))
             if choice == 1:
                 view_available_locations(selected)
+            
             elif choice == 2:
                 view_variables_measured(selected)
+
             elif choice == 3:
                 select_location(selected)
+
             elif choice == 4:
-                main_menu()
+                select_location(selected, True)
 
             elif choice == 5:
+                main_menu()
+
+            elif choice == 6:
                 bulk_data()
 
             elif choice == 0:
